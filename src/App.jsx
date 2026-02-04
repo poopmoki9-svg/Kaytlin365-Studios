@@ -117,12 +117,22 @@ const formatTime = (seconds) => {
 };
 
 const getStoredValue = (key, fallback) => {
-  const raw = window.localStorage.getItem(key);
-  return raw ? JSON.parse(raw) : fallback;
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (error) {
+    return fallback;
+  }
 };
 
 const setStoredValue = (key, value) => {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // Ignore storage errors (quota, privacy mode, etc.).
+  }
 };
 
 const useToasts = () => {
