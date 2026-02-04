@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BadgeCheck,
@@ -135,11 +135,18 @@ const setStoredValue = (key, value) => {
   }
 };
 
+const safeRandomId = () => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `toast-${Date.now()}-${Math.round(Math.random() * 10000)}`;
+};
+
 const useToasts = () => {
   const [toasts, setToasts] = useState([]);
 
   const pushToast = (type, message) => {
-    const id = crypto.randomUUID();
+    const id = safeRandomId();
     setToasts((prev) => [...prev, { id, type, message }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((toast) => toast.id !== id));
@@ -148,6 +155,42 @@ const useToasts = () => {
 
   return { toasts, pushToast };
 };
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("UI crash:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-deep-black px-6 text-white">
+          <div className="max-w-lg space-y-3 rounded-3xl border border-neon-magenta/60 bg-black/70 p-6 text-center shadow-neon">
+            <h1 className="text-2xl font-semibold">Spectrum Stream Offline</h1>
+            <p className="text-sm text-white/70">
+              The UI hit an unexpected error. Refresh the page or reset storage
+              to recover.
+            </p>
+            <p className="text-xs text-white/50">
+              {this.state.error?.message || "Unknown error"}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const App = () => {
   const [mediaItems, setMediaItems] = useState(initialMedia);
@@ -164,6 +207,15 @@ const App = () => {
   const [quality, setQuality] = useState(
     initialMedia[0].sources?.[0]?.label || "1080p",
   );
+  const [ratings, setRatings] = useState(() =>
+    getStoredValue("media-ratings", {}),
+  );
+  const [partyState, setPartyState] = useState({
+    active: true,
+    room: "neon-lounge",
+    viewers: 8,
+    host: "@kaytlin365",
+  });
   const { toasts, pushToast } = useToasts();
 
   const user = { id: "demo-user", handle: "@kaytlin365" };
@@ -189,6 +241,10 @@ const App = () => {
   useEffect(() => {
     setStoredValue("watch-history", history);
   }, [history]);
+
+  useEffect(() => {
+    setStoredValue("media-ratings", ratings);
+  }, [ratings]);
 
   const heroMedia = mediaItems.find((item) => item.isStar) || mediaItems[0];
 
@@ -308,11 +364,33 @@ const App = () => {
 
   const togglePiP = async () => {
     if (!videoRef.current) return;
+    if (!document?.pictureInPictureEnabled) {
+      pushToast("error", "PiP is not supported in this browser.");
+      return;
+    }
     if (!document.pictureInPictureElement) {
       await videoRef.current.requestPictureInPicture();
     } else {
       await document.exitPictureInPicture();
     }
+  };
+
+  const updateRating = (itemId, nextRating) => {
+    if (!user) return;
+    setRatings((prev) => ({
+      ...prev,
+      [itemId]: nextRating,
+    }));
+    pushToast("success", "Star rating captured.");
+  };
+
+  const updatePartyStatus = () => {
+    if (!user) return;
+    setPartyState((prev) => ({
+      ...prev,
+      viewers: prev.viewers + 1,
+      active: !prev.active,
+    }));
   };
 
   const historyData = history[activeMedia.id];
@@ -554,6 +632,7 @@ const App = () => {
             {filteredMedia.map((item) => {
               const isSaved = myList.some((saved) => saved.id === item.id);
               const isSelected = selectedIds.includes(item.id);
+              const rating = ratings[item.id] || 0;
               return (
                 <motion.article
                   key={item.id}
@@ -622,6 +701,25 @@ const App = () => {
                       <span>{formatTime(item.avgWatchTime)} avg</span>
                     </div>
                     <div className="flex items-center justify-between text-xs text-white/60">
+                      <span>Rating</span>
+                      <div className="flex items-center gap-1">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => updateRating(item.id, star)}
+                            className={`rounded-full border px-2 py-1 text-[10px] ${
+                              rating >= star
+                                ? "border-neon-cyan text-neon-cyan"
+                                : "border-white/20 text-white/60"
+                            }`}
+                          >
+                            {star}★
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-white/60">
                       <span>
                         Health:{" "}
                         <span
@@ -653,6 +751,90 @@ const App = () => {
               );
             })}
           </div>
+        </section>
+
+        <section className="mt-12 grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="rounded-3xl border border-white/10 bg-black/40 p-6 backdrop-blur-glass"
+          >
+            <h2 className="text-xl font-semibold">Shared Watch Party</h2>
+            <p className="mt-2 text-sm text-white/60">
+              Real-time sync preview with Firestore listeners.
+            </p>
+            <div className="mt-4 grid gap-3 text-sm text-white/70">
+              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
+                <span>Room</span>
+                <span className="text-[var(--brand-primary)]">
+                  #{partyState.room}
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
+                <span>Host</span>
+                <span>{partyState.host}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
+                <span>Viewers</span>
+                <span>{partyState.viewers}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-3">
+                <span>Status</span>
+                <span
+                  className={
+                    partyState.active ? "text-neon-cyan" : "text-neon-magenta"
+                  }
+                >
+                  {partyState.active ? "Live" : "Paused"}
+                </span>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={updatePartyStatus}
+                className="rounded-full border border-neon-cyan px-4 py-2 text-xs text-neon-cyan"
+              >
+                Toggle Party Status
+              </button>
+              <button
+                type="button"
+                onClick={() => pushToast("info", "Invite link copied.")}
+                className="rounded-full border border-white/20 px-4 py-2 text-xs text-white/70"
+              >
+                Copy Invite Link
+              </button>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.3 }}
+            className="rounded-3xl border border-white/10 bg-black/40 p-6 backdrop-blur-glass"
+          >
+            <h2 className="text-xl font-semibold">Studio Feedback</h2>
+            <p className="mt-2 text-sm text-white/60">
+              Aggregate ratings and reaction highlights.
+            </p>
+            <div className="mt-4 space-y-3 text-sm text-white/70">
+              {mediaItems.map((item) => {
+                const rating = ratings[item.id] || 0;
+                return (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/40 px-4 py-3"
+                  >
+                    <span>{item.title}</span>
+                    <span className="text-[var(--brand-primary)]">
+                      {rating}/5 ★
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
         </section>
 
         {isAdmin && (
@@ -730,4 +912,5 @@ const App = () => {
   );
 };
 
+export { ErrorBoundary };
 export default App;
